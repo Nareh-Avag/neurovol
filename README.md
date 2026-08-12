@@ -361,7 +361,7 @@ Metrics:
 
 # API Service
 
-VolForge exposes inference endpoints using FastAPI.
+NeuroVol exposes inference endpoints using FastAPI.
 
 Example:
 
@@ -435,7 +435,7 @@ Planned deployment architecture:
 
 # Inspiration
 
-VolForge is inspired by:
+NeuroVol is inspired by:
 
 * Institutional derivatives desks
 * Quantitative volatility trading systems
