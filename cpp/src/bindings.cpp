@@ -120,6 +120,20 @@ PYBIND11_MODULE(_iv_core, m) {
         py::arg("price"), py::arg("S"), py::arg("K"), py::arg("T"), py::arg("r"),
         py::arg("is_call"), "Returns (sigma, status_code, iterations).");
 
+#if defined(__clang__)
+    m.attr("COMPILER") = "clang " __clang_version__;
+#elif defined(__GNUC__)
+    m.attr("COMPILER") = "gcc " __VERSION__;
+#elif defined(_MSC_FULL_VER)
+    m.attr("COMPILER") = "msvc " + std::to_string(_MSC_FULL_VER);
+#else
+    m.attr("COMPILER") = "unknown";
+#endif
+#ifdef NEUROVOL_BUILD_FLAGS
+    m.attr("BUILD_FLAGS") = NEUROVOL_BUILD_FLAGS;
+    m.attr("BUILD_TYPE") = NEUROVOL_BUILD_TYPE;
+#endif
+
     m.attr("STATUS_CODES") = py::dict(
         py::arg("ok_newton") = 0, py::arg("ok_brent") = 1, py::arg("invalid_input") = -1,
         py::arg("below_intrinsic") = -2, py::arg("above_upper_bound") = -3,

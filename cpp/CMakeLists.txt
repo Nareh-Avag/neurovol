@@ -66,6 +66,14 @@ if(NEUROVOL_BUILD_PYTHON)
   target_compile_options(_iv_core PRIVATE ${NEUROVOL_WARNINGS})
   target_link_options(_iv_core PRIVATE ${NEUROVOL_STATIC_RUNTIME})
 
+  # Record the flags in the module so bench/benchmark.py can report what the
+  # loaded binary was actually built with.
+  string(REPLACE ";" " " _warn_str "${NEUROVOL_WARNINGS}")
+  string(TOUPPER "${CMAKE_BUILD_TYPE}" _bt)
+  target_compile_definitions(_iv_core PRIVATE
+    NEUROVOL_BUILD_FLAGS="${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${_bt}} -std=c++17 ${_warn_str}"
+    NEUROVOL_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
+
   # Put the built module next to iv_solver.py so `from . import _iv_core` works.
   set(NEUROVOL_PKG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../vol_surface_engine")
   set_target_properties(_iv_core PROPERTIES

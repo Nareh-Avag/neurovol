@@ -79,3 +79,6 @@ htmlcov/
 
 # MyPy
 .mypy_cache/
+
+# Benchmark artifacts
+bench/*.npz
