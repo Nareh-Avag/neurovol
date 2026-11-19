@@ -1,0 +1,94 @@
+{
+  "environment": {
+    "cpu": "Snapdragon(R) X Plus - X1P42100 - Qualcomm(R) Oryon(TM) CPU",
+    "logical_cpus": 8,
+    "os": "Windows-11-10.0.26300-SP0",
+    "host_arch": "ARM64",
+    "python": "3.14.2 (win-amd64)",
+    "x64_emulation": true,
+    "numpy": "2.4.4",
+    "scipy": "1.17.1",
+    "cpp_available": true,
+    "cpp_compiler": "clang 23.1.6 (https://github.com/llvm/llvm-project.git 5b10d2d74929eae78912771222c9855af97496f4)",
+    "cpp_build_type": "Release",
+    "cpp_flags": "-O2 -DNDEBUG -std=c++17 -Wall -Wextra -Wpedantic -Werror"
+  },
+  "results": {
+    "1000": {
+      "python": {
+        "repeats": 20,
+        "median_s": 3.880458900006488,
+        "p95_s": 5.087261850043434,
+        "min_s": 3.576756399939768,
+        "throughput": 257.70147958488315
+      },
+      "numpy": {
+        "repeats": 20,
+        "median_s": 0.02472629997646436,
+        "p95_s": 0.05770511502050795,
+        "min_s": 0.018888500053435564,
+        "throughput": 40442.767456184156
+      },
+      "cpp": {
+        "repeats": 20,
+        "median_s": 0.004351549956481904,
+        "p95_s": 0.005296295037260279,
+        "min_s": 0.003956299973651767,
+        "throughput": 229803.17587999604
+      }
+    },
+    "10000": {
+      "python": {
+        "repeats": 20,
+        "median_s": 46.88196579995565,
+        "p95_s": 48.38726105496753,
+        "min_s": 44.903484100010246,
+        "throughput": 213.30163591411218
+      },
+      "numpy": {
+        "repeats": 20,
+        "median_s": 0.20807470002910122,
+        "p95_s": 0.3287744549452327,
+        "min_s": 0.15949839993845671,
+        "throughput": 48059.66318154684
+      },
+      "cpp": {
+        "repeats": 20,
+        "median_s": 0.03510595002444461,
+        "p95_s": 0.04199675995623693,
+        "min_s": 0.03461470000911504,
+        "throughput": 284851.997824782
+      }
+    },
+    "100000": {
+      "python": {
+        "repeats": 3,
+        "median_s": 533.1194490999915,
+        "p95_s": 701.7734445699723,
+        "min_s": 341.7526291999966,
+        "throughput": 187.575223843023
+      },
+      "numpy": {
+        "repeats": 20,
+        "median_s": 1.6894181999959983,
+        "p95_s": 1.8146787300182041,
+        "min_s": 1.6082808000501245,
+        "throughput": 59191.97508363345
+      },
+      "cpp": {
+        "repeats": 20,
+        "median_s": 0.35408394993282855,
+        "p95_s": 0.3610257350490429,
+        "min_s": 0.35097779997158796,
+        "throughput": 282418.9009950055
+      }
+    }
+  },
+  "micro_seconds_per_call": {
+    "scipy.stats.norm.cdf(float)": 0.00010817500000121072,
+    "math.erfc based cdf": 7.213479996426031e-07,
+    "C++ norm_cdf via pybind11 (one call)": 3.9745000016409903e-07,
+    "C++ implied_vol via pybind11 (one ATM contract)": 1.7858460010029375e-06
+  },
+  "brent_fallback_share": 0.39027
+}

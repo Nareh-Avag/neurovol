@@ -154,7 +154,17 @@ def main() -> None:
     ap.add_argument("--python-repeats", default="20,20,3",
                     help="timed runs for the per-row python backend, one per size")
     ap.add_argument("--out", default=str(HERE / "results.md"))
+    ap.add_argument("--render-only", action="store_true",
+                    help="rebuild results.md from an existing results.json without timing")
     args = ap.parse_args()
+
+    if args.render_only:
+        raw = json.loads(Path(args.out).with_suffix(".json").read_text())
+        res = {int(k): v for k, v in raw["results"].items()}
+        write_markdown(Path(args.out), raw["environment"], res,
+                       raw["micro_seconds_per_call"], raw["brent_fallback_share"], args)
+        print(f"re-rendered {args.out} from results.json")
+        return
 
     sizes = [int(s) for s in args.sizes.split(",")]
     py_repeats = [int(s) for s in args.python_repeats.split(",")]
@@ -260,13 +270,18 @@ def write_markdown(path: Path, env: dict, results: dict, micro: dict,
         npm = by_b.get("numpy", {}).get("median_s")
         for b, r in by_b.items():
             sp = f"{py / r['median_s']:,.0f}x" if py else "n/a"
-            sn = f"{npm / r['median_s']:.1f}x" if npm else "n/a"
+            sn = f"{npm / r['median_s']:.3g}x" if npm else "n/a"
             L.append(f"| {n:,} | {b} | {r['repeats']} | {fmt_time(r['median_s'])} | "
                      f"{fmt_time(r['p95_s'])} | {fmt_rate(r['throughput'])} | {sp} | {sn} |")
     L.append("")
     if fallback_share is not None:
         L.append(f"Share of contracts where Newton gave up and the bracketing fallback ran: "
                  f"{fallback_share:.1%} (same in every backend, same algorithm).")
+        py_runs = [r["repeats"] for by_b in results.values() for b, r in by_b.items() if b == "python"]
+    if py_runs and min(py_runs) < 20:
+        L.append("The per-row python backend at the largest size has fewer timed runs (each "
+                 "run takes several minutes), so its p95 is close to its maximum and is less "
+                 "stable than the other rows.")
         L.append("")
     L.append("## Per-call overhead")
     L.append("")
