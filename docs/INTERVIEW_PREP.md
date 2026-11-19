@@ -489,8 +489,9 @@ division by vega, and has a fixed iteration count."
    Contracts are independent and the GIL is already released, so splitting the index
    range across `std::thread`s (each writing its own slice of the output: no locks, no
    shared writes) is straightforward. I would measure scaling from 1 to 8 threads, and do
-   it with a native ARM64 build instead of under x64 emulation, with CI building on gcc,
-   clang, and MSVC.
+   it with a native ARM64 build instead of under x64 emulation. (CI already builds and
+   tests the core on gcc, clang, Apple clang, and MSVC with warnings as errors, so a
+   threading change would be checked on all four.)
 
 ---
 

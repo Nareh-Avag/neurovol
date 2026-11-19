@@ -1,5 +1,7 @@
 # NeuroVol
 
+[![CI](https://github.com/Nareh-Avag/neurovol/actions/workflows/ci.yml/badge.svg)](https://github.com/Nareh-Avag/neurovol/actions/workflows/ci.yml)
+
 Options analytics in Python with a C++ core for implied volatility.
 
 What is in this repository today:
@@ -149,11 +151,24 @@ The build writes `vol_surface_engine/_iv_core.<python-tag>.pyd` (or `.so`), next
 `iv_solver.py`. The C++ runtime is linked statically on MinGW so the module has no extra
 DLL dependencies.
 
-An MSVC branch exists in `cpp/CMakeLists.txt` (`/W4 /permissive- /O2`) but has not been
-built or tested.
+### Windows with MSVC
 
-Compiler flags: `-O2 -std=c++17 -Wall -Wextra -Wpedantic`, plus `-Werror` with
-`-DNEUROVOL_WERROR=ON`. The build is warning-free with clang 23 (llvm-mingw).
+From a Visual Studio developer prompt (so `cl` is on `PATH`), use the Linux / macOS
+commands above with `-DCMAKE_CXX_COMPILER=cl` added to the configure line. The flags are
+`/W4 /permissive- /O2`, plus `/WX` with `-DNEUROVOL_WERROR=ON`.
+
+Compiler flags elsewhere: `-O2 -std=c++17 -Wall -Wextra -Wpedantic`, plus `-Werror` with
+`-DNEUROVOL_WERROR=ON`.
+
+### Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull
+request. It runs pytest without the extension on Python 3.11 and 3.12, then builds the
+C++ core with warnings as errors using gcc and clang on Linux, Apple clang on macOS, and
+MSVC on Windows, and on each of those runs the C++ unit tests, confirms the extension
+loads, and runs the full pytest suite against it. All six jobs pass. The llvm-mingw
+build above is also warning-free (clang 23, checked locally, not in CI). The recorded
+benchmark numbers come from the llvm-mingw build only; CI does not run the benchmark.
 
 ## Running the benchmark and accuracy check
 
