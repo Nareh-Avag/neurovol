@@ -15,6 +15,7 @@ solver either returns NaN or returns a sigma that reproduces the price.
 """
 
 import itertools
+import logging
 import math
 import time
 
@@ -233,3 +234,15 @@ def test_compute_iv_batch_missing_column():
 def test_unknown_backend():
     with pytest.raises(ValueError):
         compute_iv_batch(_quotes(), R, backend="fortran")
+
+
+def test_falls_back_to_numpy_when_extension_missing(monkeypatch, caplog):
+    from vol_surface_engine.synthetic_chain import generate_chain
+    df = generate_chain(1_000)
+    args = (df["mid"].to_numpy(), df["underlying_price"].to_numpy(), df["strike"].to_numpy(),
+            df["time_to_expiry"].to_numpy(), R, (df["option_type"] == "C").to_numpy())
+    monkeypatch.setattr(ivs, "CPP_AVAILABLE", False)
+    with caplog.at_level(logging.WARNING, logger=ivs.logger.name):
+        out = ivs.implied_vol_array(*args, backend="cpp")
+    assert "falling back" in caplog.text
+    np.testing.assert_array_equal(out, ivs.implied_vol_array(*args, backend="numpy"))
