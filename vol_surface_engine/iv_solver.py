@@ -359,9 +359,12 @@ def implied_vol_array(price, S, K, T, r: float, is_call,
             logger.warning("C++ backend not built; falling back to NumPy backend")
             return implied_vol_vectorized(price, S, K, T, r, is_call)
         # np.ascontiguousarray is a no-op (no copy) when the input is already
-        # a C-contiguous float64 / uint8 array.
+        # a C-contiguous float64 array. A NumPy bool array is one byte per
+        # element holding 0 or 1, so .view(np.uint8) reinterprets it without
+        # copying.
         price, S, K, T = (np.ascontiguousarray(a, dtype=np.float64) for a in (price, S, K, T))
-        flags = np.ascontiguousarray(is_call, dtype=np.uint8)
+        flags = np.ascontiguousarray(is_call)
+        flags = flags.view(np.uint8) if flags.dtype == np.bool_ else flags.astype(np.uint8)
         out = np.empty(price.shape[0], dtype=np.float64)
         _iv_core.implied_vol_batch(S, K, T, price, flags, float(r), out)
         return out
