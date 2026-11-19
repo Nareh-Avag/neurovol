@@ -50,6 +50,12 @@ target_compile_options(test_iv_core PRIVATE ${NEUROVOL_WARNINGS})
 target_link_options(test_iv_core PRIVATE ${NEUROVOL_STATIC_RUNTIME})
 add_test(NAME test_iv_core COMMAND test_iv_core)
 
+# --- Kernel micro-benchmark (not built by default) ---------------------------
+add_executable(bench_kernels EXCLUDE_FROM_ALL bench/bench_kernels.cpp)
+target_link_libraries(bench_kernels PRIVATE iv_core)
+target_compile_options(bench_kernels PRIVATE ${NEUROVOL_WARNINGS})
+target_link_options(bench_kernels PRIVATE ${NEUROVOL_STATIC_RUNTIME})
+
 # --- Python extension ---------------------------------------------------------
 if(NEUROVOL_BUILD_PYTHON)
   find_package(Python 3.11 COMPONENTS Interpreter Development.Module REQUIRED)

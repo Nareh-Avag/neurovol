@@ -24,26 +24,42 @@ each one is in.
 
 ## Benchmark summary
 
-Solving implied volatility for a 100,000-contract synthetic chain, single thread
-(median of 20 runs, except 3 runs for the per-row Python solver):
+Solving implied volatility for a 100,000-contract synthetic chain, single thread, median
+of 20 runs (3 for the per-row Python solver). Two library versions are shown because
+the result depends on them:
 
-| Backend | Median time | Throughput | vs per-row Python | vs NumPy |
-|---|---|---|---|---|
-| `python` (original per-row) | 533.12 s | 188 contracts/s | 1x | |
-| `numpy` (vectorized) | 1.69 s | 59.2k contracts/s | 316x | 1x |
-| `cpp` (this repo's C++ core) | 354.08 ms | 282.4k contracts/s | 1,506x | 4.77x |
+| Backend | NumPy 2.4.4 + SciPy 1.17.1 | NumPy 2.5.5 + SciPy 1.18.1 |
+|---|---|---|
+| `python` (original per-row) | 533.12 s | not re-run (about 9 minutes per run) |
+| `numpy` (vectorized) | 1.69 s | 315.69 ms |
+| `cpp` (C++ core) | 354.08 ms | 372.44 ms |
 
-Measured on a Snapdragon X Plus laptop with x64 Python under Windows emulation (so the
-C++ extension ran emulated too); the ratios are the meaningful part. Across the 100k
-chain the C++ and Python IVs differ by at most 1.58e-12.
+**With current SciPy, the C++ core is not faster than the vectorized NumPy backend for
+chains of 10k contracts or more.** NumPy was 1.14x faster at 10k and 1.18x faster at
+100k. C++ was 1.68x faster at 1k, where NumPy's fixed per-iteration overhead dominates.
+With SciPy 1.17.1, C++ was 4.8x to 5.9x faster than NumPy at every size.
 
-The large speedup over the per-row solver is mostly the cost of calling
-`scipy.stats.norm.cdf` on one float (108.2 us per call here, versus 0.7 us for a
-`math.erfc` version), not Python arithmetic itself. The fair comparison is against
-vectorized NumPy: 4.8x to 5.9x depending on chain size.
+The difference is one function, the normal CDF. Timed on one million values
+(`bench/kernels.py`, `cpp/bench/bench_kernels.cpp`):
+
+| Normal CDF implementation | ms per 1M values |
+|---|---|
+| `scipy.special.ndtr`, SciPy 1.17.1 | 296.64 |
+| C++ `norm_cdf` (C runtime `erf`/`erfc`) | 144.81 |
+| `scipy.special.ndtr`, SciPy 1.18.1 | 40.72 |
+
+`exp` and `log` cost about the same in C++ and NumPy, and NumPy's did not change between
+versions. Against the original per-row solver, C++ is 1,506x faster, mostly because it
+avoids calling `scipy.stats.norm.cdf` on one float at a time (108.2 us per call here,
+versus 0.7 us for a `math.erfc` version).
+
+All numbers were measured on a Snapdragon X Plus laptop with x64 Python under Windows
+emulation, so the C++ extension ran emulated too. Across the 100k chain the C++ and
+Python IVs differ by at most 1.58e-12.
 
 Full methodology, environment, and per-call overhead numbers:
-[`bench/results.md`](bench/results.md). Cross-backend accuracy:
+[`bench/results.md`](bench/results.md) (SciPy 1.17.1, all three backends) and
+[`bench/results_scipy118.md`](bench/results_scipy118.md) (SciPy 1.18.1, NumPy and C++). Cross-backend accuracy:
 [`bench/agreement.md`](bench/agreement.md).
 
 ## Repository layout
@@ -144,6 +160,8 @@ Compiler flags: `-O2 -std=c++17 -Wall -Wextra -Wpedantic`, plus `-Werror` with
 ```bash
 python bench/benchmark.py            # writes bench/results.md and bench/results.json
 python bench/compare_backends.py     # writes bench/agreement.md (100k contracts)
+python bench/kernels.py              # NumPy/SciPy normal CDF, exp, log on 1M values
+cmake --build build --target bench_kernels && ./build/bench_kernels   # C++ equivalents
 ```
 
 `benchmark.py` defaults to 20 timed runs per size for `numpy` and `cpp`. The per-row
@@ -179,8 +197,9 @@ None of the following exists in the repository yet:
 * Live market data ingestion and streaming (Kafka producers and consumers)
 * REST API and dashboard
 * Working Airflow pipelines and container deployment
-* A better initial guess in the IV solver to reduce fallback calls, and multithreading
-  across contracts in the C++ batch
+* A faster normal CDF in the C++ core (currently the bottleneck, see the benchmark
+  summary), a better initial guess to reduce fallback calls, and multithreading across
+  contracts in the C++ batch
 
 ## License
 

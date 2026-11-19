@@ -4,10 +4,17 @@ This is written for you, not for the repo's users. It walks through the C++ code
 you know Python well and C++ basics, ties every performance claim to a number we
 actually measured, and ends with likely interview questions and an honest resume bullet.
 
-All numbers come from `bench/results.md` and `bench/agreement.md`, measured on
+All numbers come from `bench/results.md`, `bench/results_scipy118.md`,
+`bench/agreement.md`, `bench/kernels.py`, and `cpp/bench/bench_kernels.cpp`, measured on
 a Snapdragon X Plus (ARM64) Windows laptop. Python and the C++ extension were both x64 builds running under
 Windows' x64 emulation on that ARM CPU, so treat the absolute times as
 "this laptop, emulated" and the ratios as the real result.
+
+**The headline, before anything else:** with the SciPy version a fresh install gets today
+(1.18.1), the C++ core is *not* faster than the vectorized NumPy backend on chains of
+10k contracts or more. NumPy is 1.14x to 1.18x faster there. With SciPy 1.17.1, C++
+was 4.8x to 5.9x faster. Sections 3 and 4 show the measurements and the cause. Know
+this cold; it is the most important thing in this document.
 
 ---
 
@@ -191,7 +198,31 @@ run takes about 9 minutes).
 | 100,000 | numpy | 1.69 s | 1.81 s | 59.2k/s | 316x | 1x |
 | 100,000 | cpp | 354.08 ms | 361.03 ms | 282.4k/s | 1,506x | 4.77x |
 
-Per-call costs measured in the same run:
+The same NumPy and C++ benchmark in a fresh virtualenv, which installed NumPy 2.5.5 and
+SciPy 1.18.1 (`bench/results_scipy118.md`, 20 runs each):
+
+| Contracts | Backend | Median | p95 | Throughput | C++ vs NumPy |
+|---|---|---|---|---|---|
+| 1,000 | numpy | 5.91 ms | 6.73 ms | 169.3k/s | |
+| 1,000 | cpp | 3.52 ms | 4.16 ms | 284.1k/s | 1.68x faster |
+| 10,000 | numpy | 31.39 ms | 33.45 ms | 318.6k/s | |
+| 10,000 | cpp | 35.81 ms | 38.10 ms | 279.3k/s | 1.14x slower |
+| 100,000 | numpy | 315.69 ms | 406.09 ms | 316.8k/s | |
+| 100,000 | cpp | 372.44 ms | 480.56 ms | 268.5k/s | 1.18x slower |
+
+The C++ code is identical in both runs; its 100k median moved from 354.08 ms to
+372.44 ms, about 5%, which is ordinary run-to-run variation on this laptop. NumPy moved
+from 1.69 s to 315.69 ms.
+
+The kernels behind that change, one million float64 values, median of 15:
+
+| Kernel | SciPy 1.17.1 / NumPy 2.4.4 | SciPy 1.18.1 / NumPy 2.5.5 | C++ scalar loop |
+|---|---|---|---|
+| normal CDF (`ndtr` / `norm_cdf`) | 296.64 ms | 40.72 ms | 144.81 ms |
+| `exp` | 15.19 ms | 14.74 ms | 12.02 ms |
+| `log` | 17.77 ms | 17.29 ms | 14.66 ms |
+
+Per-call costs measured in the first run:
 
 | Call | Time |
 |---|---|
@@ -240,7 +271,7 @@ fallback.
 
 ---
 
-## 4. Where C++ won, where NumPy was close, and why
+## 4. Where C++ won, where NumPy matched or beat it, and why
 
 ### Against the original per-row Python: 892x to 1,506x
 
@@ -253,8 +284,9 @@ all their time on argument checking and array conversion. So most of this speedu
 "stop paying scipy's per-call overhead", which a pure-Python rewrite using `math.erfc`
 would also partly get. I did not benchmark that rewrite, so I don't quote a number for
 it. **Do not say "C++ is 1,500x faster than Python"** in an interview. Say "1,500x faster
-than the original per-row implementation, mostly from removing per-call overhead; 4.8x
-faster than a fair vectorized NumPy version."
+than the original per-row implementation, mostly from removing per-call overhead; and
+about even with a fair vectorized NumPy version on current SciPy: faster at 1k
+contracts, slightly slower at 10k and 100k."
 
 The ratio also grows with size (892x at 1k, 1,506x at 100k) because the per-row solver
 got slower per contract at larger sizes (258/s to 188/s) while C++ stayed flat. I have
@@ -263,40 +295,50 @@ not investigated why. The 100k Python figure is also only 3 runs and its p95
 separate agreement run the same 100k Python solve took 404 s, which shows how much that
 figure moves between runs.
 
-### Against vectorized NumPy: 4.8x to 5.9x
+### Against vectorized NumPy: it depends on SciPy, and today NumPy wins at scale
 
-NumPy was the honest competitor. Both do the arithmetic in compiled loops, and NumPy's
-loops are fast. The gap comes from what happens around them:
+With SciPy 1.17.1, C++ was 4.8x to 5.9x faster. With SciPy 1.18.1, NumPy was 1.14x
+faster at 10k and 1.18x faster at 100k, and C++ was only ahead at 1k (1.68x).
+
+**What changed.** Only one kernel: SciPy's normal CDF, `scipy.special.ndtr`, went from
+296.64 ms to 40.72 ms per million values (7.3x faster). NumPy's `exp` and `log` did not
+change. The NumPy backend calls `ndtr` four times per active row per iteration, so its
+total time fell from 1.69 s to 315.69 ms while the C++ time stayed put. I do not know
+what SciPy changed internally, so I don't claim a reason, only the measurement.
+
+**Why that is enough to flip the result.** The normal CDF is the expensive part of both
+backends. My C++ `norm_cdf` calls the C runtime's `erf`/`erfc` once per value and costs
+144.81 ms per million: twice as fast as the old SciPy, but 3.6x slower than the new one.
+`exp` and `log` cost about the same everywhere. So once SciPy had a much faster CDF, the
+backend that used it won, even though everything around the CDF is still less efficient
+in NumPy.
+
+**What is still true about NumPy's overhead** (and is why C++ still wins at 1k):
 
 1. **Every operation is a separate pass with a temporary array.** `d1 = (log(S/K) + ...)
-   / (...)` in NumPy is about eight array operations, each reading its inputs from
-   memory and writing a new array. C++ evaluates the whole formula for one contract in
-   registers and writes one number.
+   / (...)` in NumPy is about eight array operations, each writing a new array. C++
+   evaluates the whole formula for one contract in registers.
 2. **Both branches are computed.** `np.where(is_call, call_price, put_price)` computes
-   the call price and the put price for every row, then discards one. C++ uses an `if`
-   and computes only the one it needs.
-3. **Per-iteration Python overhead.** Each Newton iteration is a Python loop step that
-   issues dozens of NumPy calls and fancy-indexes the still-active rows. For small
-   arrays that fixed cost dominates: NumPy's throughput rises from 40.4k/s at 1k to
-   59.2k/s at 100k as the fixed cost is spread over more rows, and its p95 at 1k
-   (57.71 ms) is more than twice its median (24.73 ms).
-4. **A weaker fallback.** Brent picks a different step for every row, which does not
-   vectorize, so the NumPy backend uses bisection: 32 fixed halvings for every one of the
-   39% fallback contracts, where Brent usually needs fewer. Part of the 4.8x is this
-   algorithmic difference, not language speed. I did not measure how much.
+   both prices for every row and throws one away. C++ computes one.
+3. **Per-iteration Python overhead.** Each Newton iteration issues dozens of NumPy calls
+   and fancy-indexes the active rows. With small arrays this fixed cost dominates, which
+   is why NumPy's throughput rises with size (169.3k/s at 1k to 316.8k/s at 100k on
+   SciPy 1.18.1) while C++ is flat.
+4. **A weaker fallback.** The NumPy backend uses 32 fixed bisection steps where Brent
+   usually needs fewer. Despite that handicap NumPy now wins at scale, which shows how
+   much the CDF dominates.
 
-Where NumPy would be close: a single cheap formula over a large array (for example,
-pricing at a known volatility, no iteration) has no per-iteration overhead and no
-fallback, so NumPy would likely be within a small factor of C++. I did not benchmark that
-case; treat it as a reasoned expectation, not a result.
+**The lesson to say in an interview:** "Rewriting in C++ is not automatically faster. A
+well-vectorized NumPy pipeline runs compiled, often SIMD-optimized library code, and
+once the library improved its normal CDF it beat my scalar C++ loop. The profile, not the
+language, decides. In my case the profile says the C++ core needs a faster normal CDF."
 
 ### What the GIL and cache did *not* contribute
 
-Neither explains the measured gap. The runs are single-threaded, so releasing the GIL
-changed nothing in these numbers. Memory traffic is about 12 MB/s, so cache behavior is
-not the bottleneck. The C++ win here is compute and overhead: fused per-contract
-arithmetic in registers, no temporaries, one branch, one boundary crossing, and a better
-fallback.
+Neither explains any of the measured gaps. The runs are single-threaded, so releasing the
+GIL changed nothing in these numbers. Memory traffic is about 12 MB/s, so cache behavior
+is not the bottleneck. These results are about compute (mostly the normal CDF) and
+per-call overhead.
 
 ### The emulation caveat
 
@@ -429,23 +471,26 @@ division by vega, and has a fixed iteration count."
 
 ## 6. Three things I would improve next
 
-1. **A better initial guess.** 39.0% of contracts skip Newton almost immediately and go
+1. **A faster normal CDF in C++.** This is the measured bottleneck. The C runtime's
+   `erf`/`erfc` path costs 144.81 ms per million values, against 40.72 ms for SciPy
+   1.18.1's `ndtr`. Options: a branch-light rational or polynomial approximation with a
+   bounded, tested error (so the compiler can vectorize the loop), or restructuring the
+   batch so each Newton iteration evaluates the CDF for many contracts at once instead of
+   one at a time. Success criterion: `bench_kernels` CDF time well below 40.72 ms per
+   million, the 1.58e-12 agreement held (or any loosening documented), and then a re-run
+   of the full benchmark.
+2. **A better initial guess.** 39.0% of contracts skip Newton almost immediately and go
    to the slower bracketing fallback, because Brenner-Subrahmanyam is only accurate at
    the money. A guess that handles the wings (for example the Corrado-Miller formula, or
-   Peter Jaeckel's "Let's Be Rational" method) would send most of those contracts down
-   the fast path. This is the highest-leverage change: it helps every backend, and it is
-   an algorithm fix, not a language fix. I would measure the fallback share and time per
-   contract before and after.
-2. **Use the cores.** The batch runs on one of 8 logical CPUs. Contracts are independent
-   and the GIL is already released, so splitting the index range across `std::thread`s
-   (each writing its own slice of the output, so no locks and no shared writes) is
-   straightforward. I would measure scaling from 1 to 8 threads and expect less than
-   linear, partly because fallback contracts make the work per chunk uneven.
-3. **Native build, CI, and reproducibility.** Every number here was measured under x64
-   emulation, and only the llvm-mingw build was tested end to end. I would benchmark a
-   native ARM64 Python with a native extension, add CI that builds with gcc, clang, and
-   MSVC under `-Werror` and runs both test suites, and add `-ffp-contract=off` so results
-   are bit-identical across x64 and ARM.
+   Peter Jaeckel's "Let's Be Rational" method) would move most of those contracts to the
+   fast path in every backend. I would measure the fallback share and time per contract
+   before and after.
+3. **Use the cores, on native hardware.** The batch runs on one of 8 logical CPUs.
+   Contracts are independent and the GIL is already released, so splitting the index
+   range across `std::thread`s (each writing its own slice of the output: no locks, no
+   shared writes) is straightforward. I would measure scaling from 1 to 8 threads, and do
+   it with a native ARM64 build instead of under x64 emulation, with CI building on gcc,
+   clang, and MSVC.
 
 ---
 
@@ -453,17 +498,20 @@ division by vega, and has a fixed iteration count."
 
 > Built a C++17 implied-volatility engine (Newton-Raphson with Brent fallback) for
 > options-chain processing, exposed to Python through pybind11 with zero-copy NumPy
-> buffers and no heap allocation in the hot loop, achieving 282k contracts/s single
-> threaded on a 100k-contract chain: 4.8x faster than a vectorized NumPy implementation
-> and 1,506x faster than the original per-row solver, with results matching the Python
-> reference to within 1.6e-12.
+> buffers and no heap allocation in the hot loop, processing 282k contracts/s single
+> threaded on a 100k-contract chain, 1,506x faster than the original per-row Python
+> solver, with IVs matching the Python reference to within 1.6e-12.
 
-Every figure in that bullet is in `bench/results.md` or `bench/agreement.md`. A shorter
-version:
+Every figure in that bullet is in `bench/results.md` or `bench/agreement.md`.
 
-> Built a C++17/pybind11 implied-volatility engine for options chains, achieving 4.8x
-> the throughput of vectorized NumPy (282k contracts/s, single thread) with zero heap
-> allocation in the hot loop and IVs matching the Python reference to 1.6e-12.
+**Do not claim it beats NumPy.** It did with SciPy 1.17.1 (4.8x) but not with SciPy
+1.18.1 at 10k+ contracts. If you want to mention NumPy, make it the story, because it is
+a good one:
+
+> Benchmarked the C++ core against a vectorized NumPy baseline and found the advantage
+> (4.8x with SciPy 1.17) disappeared on SciPy 1.18; profiled kernels and traced it to the
+> normal CDF (SciPy's new implementation is 3.6x faster than the C runtime's), which set
+> the next optimization target.
 
 About the old claim, "C++ backend for low-latency options-chain processing": the C++
 backend now exists and processes options chains. **"Low-latency" is the weak word.** I
@@ -474,5 +522,6 @@ laptop, single thread. I haven't measured tick-to-result latency." Prefer the bu
 above, which say exactly what was measured.
 
 If asked about the 1,506x figure, say right away that it is mostly removing scipy's
-per-call overhead (section 4) and that the fair comparison is 4.8x against NumPy.
-Volunteering that is much better than having it pulled out of you.
+per-call overhead (section 4), and that against well-vectorized NumPy on current SciPy
+the C++ core is about even. Volunteering both is much better than having them pulled
+out of you.

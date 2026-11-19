@@ -1,0 +1,73 @@
+{
+  "environment": {
+    "cpu": "Snapdragon(R) X Plus - X1P42100 - Qualcomm(R) Oryon(TM) CPU",
+    "logical_cpus": 8,
+    "os": "Windows-11-10.0.26300-SP0",
+    "host_arch": "ARM64",
+    "python": "3.14.2 (win-amd64)",
+    "x64_emulation": true,
+    "numpy": "2.5.5",
+    "scipy": "1.18.1",
+    "cpp_available": true,
+    "cpp_compiler": "clang 23.1.6 (https://github.com/llvm/llvm-project.git 5b10d2d74929eae78912771222c9855af97496f4)",
+    "cpp_build_type": "Release",
+    "cpp_flags": "-O2 -DNDEBUG -std=c++17 -Wall -Wextra -Wpedantic -Werror"
+  },
+  "results": {
+    "1000": {
+      "numpy": {
+        "repeats": 20,
+        "median_s": 0.005906350037548691,
+        "p95_s": 0.006728360056877137,
+        "min_s": 0.005549399997107685,
+        "throughput": 169309.30162327958
+      },
+      "cpp": {
+        "repeats": 20,
+        "median_s": 0.003520249912980944,
+        "p95_s": 0.0041579200362321,
+        "min_s": 0.0034248000010848045,
+        "throughput": 284070.7406347753
+      }
+    },
+    "10000": {
+      "numpy": {
+        "repeats": 20,
+        "median_s": 0.031388500065077096,
+        "p95_s": 0.03345167993102223,
+        "min_s": 0.030871700029820204,
+        "throughput": 318588.01724412496
+      },
+      "cpp": {
+        "repeats": 20,
+        "median_s": 0.035809600027278066,
+        "p95_s": 0.03810314001748339,
+        "min_s": 0.034612499992363155,
+        "throughput": 279254.7247772237
+      }
+    },
+    "100000": {
+      "numpy": {
+        "repeats": 20,
+        "median_s": 0.3156917999731377,
+        "p95_s": 0.406085964984959,
+        "min_s": 0.2986394999315962,
+        "throughput": 316764.64199738175
+      },
+      "cpp": {
+        "repeats": 20,
+        "median_s": 0.372441700019408,
+        "p95_s": 0.4805617599748076,
+        "min_s": 0.36153739993460476,
+        "throughput": 268498.3985273104
+      }
+    }
+  },
+  "micro_seconds_per_call": {
+    "scipy.stats.norm.cdf(float)": 0.00012001140002394095,
+    "math.erfc based cdf": 6.978924997383728e-07,
+    "C++ norm_cdf via pybind11 (one call)": 3.488784999353811e-07,
+    "C++ implied_vol via pybind11 (one ATM contract)": 1.6377740004099906e-06
+  },
+  "brent_fallback_share": 0.39027
+}
