@@ -1,291 +1,187 @@
-# Neural Volatility Surface Forecasting System
+# NeuroVol
 
-A production-grade deep learning platform that forecasts implied-volatility surfaces for equity index options, generates actionable trading signals, and provides a complete research and backtesting framework.
+Options analytics in Python with a C++ core for implied volatility.
 
----
+What is in this repository today:
 
-## Architecture
+* **Implied volatility engine** with three interchangeable backends that run the same
+  algorithm (Brenner-Subrahmanyam initial guess, Newton-Raphson, bracketing fallback):
+  * `python`: the original per-row solver (scipy `norm.cdf` and `brentq`)
+  * `numpy`: vectorized Newton with a vectorized bisection fallback
+  * `cpp`: a C++17 batch solver exposed through pybind11 (zero-copy NumPy input,
+    GIL released, no heap allocation in the hot loop)
+* **SVI calibration** of implied-variance slices with a butterfly-arbitrage check
+* **Volatility features**: realized volatility estimators (close-to-close, Parkinson,
+  Yang-Zhang, GARCH(1,1)) and IV term-structure features
+* **Walk-forward validation** fold splitting with an embargo gap
+* **Backtesting toolkit**: signal generation, vol-carry P&L simulation, Greek P&L
+  attribution, transaction cost model
+* **Tests** in Python (pytest) and C++ (a standalone test executable), and a
+  **benchmark** with recorded results
+
+See [`docs/architecture.md`](docs/architecture.md) for how the pieces fit and what state
+each one is in.
+
+## Benchmark summary
+
+Solving implied volatility for a 100,000-contract synthetic chain, single thread
+(median of 20 runs, except 3 runs for the per-row Python solver):
+
+| Backend | Median time | Throughput | vs per-row Python | vs NumPy |
+|---|---|---|---|---|
+| `python` (original per-row) | 533.12 s | 188 contracts/s | 1x | |
+| `numpy` (vectorized) | 1.69 s | 59.2k contracts/s | 316x | 1x |
+| `cpp` (this repo's C++ core) | 354.08 ms | 282.4k contracts/s | 1,506x | 4.77x |
+
+Measured on a Snapdragon X Plus laptop with x64 Python under Windows emulation (so the
+C++ extension ran emulated too); the ratios are the meaningful part. Across the 100k
+chain the C++ and Python IVs differ by at most 1.58e-12.
+
+The large speedup over the per-row solver is mostly the cost of calling
+`scipy.stats.norm.cdf` on one float (108.2 us per call here, versus 0.7 us for a
+`math.erfc` version), not Python arithmetic itself. The fair comparison is against
+vectorized NumPy: 4.8x to 5.9x depending on chain size.
+
+Full methodology, environment, and per-call overhead numbers:
+[`bench/results.md`](bench/results.md). Cross-backend accuracy:
+[`bench/agreement.md`](bench/agreement.md).
+
+## Repository layout
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│              MARKET DATA  (options chain, ticks)           │
-└───────────────────────┬────────────────────────────────────┘
-                        │
-                        ▼
-┌────────────────────────────────────────────────────────────┐
-│              KAFKA STREAMING BUS                           │
-│  options.raw  │  options.iv  │  surface.snapshots  │ ...   │
-└───────────────────────┬────────────────────────────────────┘
-                        │
-          ┌─────────────┴──────────────┐
-          ▼                            ▼
-┌──────────────────┐        ┌──────────────────────────┐
-│ IV Surface Engine │        │  Feature Extractor       │
-│ (SVI fitting,    │        │  (60+ features, PCA,     │
-│  Newton IV solve)│        │   regime detection)      │
-└────────┬─────────┘        └────────────┬─────────────┘
-         └──────────────┬────────────────┘
-                        ▼
-┌────────────────────────────────────────────────────────────┐
-│              NEURAL FORECAST ENGINE                        │
-│    ConvLSTM (spatial+temporal)  │  Transformer (attn.)    │
-│    Ensemble + Uncertainty Quantification                   │
-└───────────────────────┬────────────────────────────────────┘
-                        │
-          ┌─────────────┴──────────────┐
-          ▼                            ▼
-┌──────────────────┐        ┌──────────────────────────┐
-│ Signal Generator  │        │  FastAPI REST + Streamlit│
-│ (carry/skew/TS)  │        │  Dashboard               │
-└──────────────────┘        └──────────────────────────┘
+cpp/
+  include/neurovol/iv_core.hpp   C++ API: pricing, vega, IV solver, batch, status codes
+  src/iv_core.cpp                Implementation (noexcept, no heap, bounded loops)
+  src/bindings.cpp               pybind11 module vol_surface_engine._iv_core
+  tests/test_iv_core.cpp         C++ unit tests (no framework needed)
+  CMakeLists.txt
+vol_surface_engine/
+  iv_solver.py                   Python reference, NumPy backend, backend dispatch
+  svi_calibrator.py              SVI slice fitting
+  synthetic_chain.py             Seeded synthetic options chain with a known smile
+  schemas.py                     Dataclasses
+features/                        Realized-vol estimators and IV features
+backtesting/                     Signals, backtest loop, P&L attribution, costs
+training/                        Walk-forward splitter, Lightning module (see status)
+research/analysis/               Surface PCA, regime classification
+bench/                           benchmark.py, compare_backends.py, recorded results
+tests/                           pytest suite
+docs/                            architecture.md, data_dictionary.md, INTERVIEW_PREP.md
+notebooks/                       Exploration notebooks
+airflow/dags/, kafka/            Scaffolding only (see Status below)
 ```
 
----
+## Quick start (Python only)
 
-## Prerequisites
-
-| Requirement | Minimum Version | Notes |
-|---|---|---|
-| Python | 3.11+ | Use pyenv or conda |
-| Docker + docker-compose | 24 + v2 | Required for all services |
-| CUDA toolkit | 11.8+ | Optional, for GPU training |
-| 8 GB RAM | 16 GB recommended | For full pipeline |
-
----
-
-## Quick Start
+Requires Python 3.11 or newer.
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/nareh-avag/neural-volatility.git
-cd neural-volatility
-
-# 2. Install Python dependencies (for local development)
+git clone https://github.com/Nareh-Avag/neurovol.git
+cd neurovol
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
-
-# 3. Copy environment template and add your API keys
-cp .env.example .env
-
-# 4. Start all services (Kafka, Airflow, API, Dashboard, Postgres)
-docker-compose up -d
-
-# 5. Open the live Streamlit dashboard
-open http://localhost:8501        # macOS
-# xdg-open http://localhost:8501  # Linux
-# start http://localhost:8501     # Windows
+pytest
 ```
 
-**Check service health:**
-```bash
-curl http://localhost:8000/health
-# → {"status": "ok", "model": "champion_v3", "uptime_s": 42}
+Without the C++ extension the `cpp` tests are skipped and `backend="cpp"` falls back to
+the NumPy backend with a warning.
+
+```python
+from vol_surface_engine.iv_solver import compute_iv_batch
+from vol_surface_engine.synthetic_chain import generate_chain
+
+chain = generate_chain(10_000)                       # deterministic, seed=12345
+out = compute_iv_batch(chain, rate=0.03, backend="cpp")
+print(out[["strike", "time_to_expiry", "option_type", "implied_vol", "true_iv"]].head())
 ```
 
-**Airflow UI:** http://localhost:8080 (user: `admin`, password: from `.env`)
+## Building the C++ extension
 
----
-
-## Project Structure
-
-```
-neural-volatility/
-├── airflow/
-│   └── dags/
-│       ├── daily_surface_pipeline.py   # 5 PM ET weekday pipeline
-│       └── weekly_retraining.py        # Sunday champion-challenger training
-├── backtesting/
-│   ├── backtest_engine.py              # Event-driven backtest loop
-│   ├── execution_model.py              # Transaction cost modelling
-│   ├── pnl_attribution.py              # Greek P&L breakdown
-│   └── signal_generator.py            # Vol carry / skew / TS signals
-├── configs/
-│   ├── model_config.yaml               # Architecture hyperparameters
-│   └── backtest_config.yaml            # Backtest parameters
-├── data/                               # Local data cache (gitignored)
-├── docs/
-│   ├── architecture.md                 # System design & decisions
-│   └── data_dictionary.md             # Full field definitions
-├── features/                           # Feature extraction modules
-├── kafka/
-│   └── create_topics.sh                # Kafka topic bootstrap script
-├── models/                             # Model architecture implementations
-├── notebooks/
-│   ├── 01_data_exploration.ipynb
-│   ├── 02_iv_calculation_demo.ipynb
-│   └── 05_model_training_demo.ipynb
-├── research/
-│   └── analysis/
-│       ├── regime_analysis.py          # HMM-based regime classification
-│       └── surface_pca.py             # PCA of IV surfaces
-├── training/                           # Walk-forward training utilities
-├── vol_surface_engine/                 # Core IV computation library
-├── docker-compose.yml
-├── pyproject.toml
-└── README.md
-```
-
----
-
-## Configuration Guide
-
-All runtime configuration lives in the `configs/` directory and in environment variables.
-
-### Environment Variables (`.env`)
+The build needs CMake 3.18+, a C++17 compiler, and pybind11. All but the compiler come
+from pip:
 
 ```bash
-# Market data
-MARKET_DATA_API_KEY=your_key_here
-UNDERLYING=SPX
-
-# Database
-DATABASE_URL=postgresql://user:pass@localhost:5432/vol_surface
-
-# Object storage
-S3_BUCKET=vol-surface-data
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-
-# Airflow
-AIRFLOW_ADMIN_PASSWORD=changeme
-AIRFLOW_SECRET_KEY=changeme
-
-# Kafka
-KAFKA_HOST=localhost:9092
-
-# Model settings
-MODEL_REGISTRY_PATH=s3://vol-surface-models/registry
-ENABLE_GPU=false
+pip install -e ".[dev,cpp]"        # pybind11, cmake, ninja
 ```
 
-### Model Configuration (`configs/model_config.yaml`)
-
-```yaml
-architecture: conv_lstm      # conv_lstm | transformer | ensemble
-in_channels: 1
-hidden_channels: 32
-n_lstm_layers: 2
-lookback_days: 30
-H: 15                        # expiry nodes
-W: 25                        # strike nodes
-learning_rate: 1.0e-3
-batch_size: 32
-max_epochs: 100
-early_stopping_patience: 10
-```
-
-### Backtest Configuration (`configs/backtest_config.yaml`)
-
-```yaml
-signal_config:
-  vol_carry_threshold: 0.02
-  skew_scale: 0.05
-  term_structure_scale: 0.03
-vega_notional: 10000
-annualisation: 252
-min_signal_threshold: 0.10
-```
-
----
-
-## Running Backtests
+### Linux / macOS (gcc or clang)
 
 ```bash
-# Run full backtest with default config
-python -m backtesting.backtest_engine \
-    --config configs/backtest_config.yaml \
-    --start 2020-01-01 \
-    --end   2024-12-31
-
-# Run with custom vega notional
-python -m backtesting.backtest_engine \
-    --vega-notional 50000 \
-    --underlying SPX
+cmake -S cpp -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNEUROVOL_WERROR=ON
+cmake --build build
+ctest --test-dir build --output-on-failure     # C++ unit tests
+pytest                                         # now includes the cpp backend
 ```
 
-The backtest engine prints a formatted results table (using `rich`) and saves
-daily P&L to `data/backtest_results_{date}.parquet`.
+### Windows with llvm-mingw (what the recorded results used)
 
----
+Download an llvm-mingw release from https://github.com/mstorsjo/llvm-mingw/releases
+(`ucrt-x86_64` for an Intel/AMD PC, `ucrt-aarch64` for a Windows on ARM PC), unzip it,
+and put its `bin` folder on `PATH`. The compiler must target the same architecture as
+your Python (`python -c "import sysconfig; print(sysconfig.get_platform())"`); for a
+`win-amd64` Python use `x86_64-w64-mingw32-clang++`:
 
-## API Endpoints
+```powershell
+cmake -S cpp -B build -G Ninja -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-clang++ -DNEUROVOL_WERROR=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
+pytest
+```
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/health` | Service health check |
-| `GET` | `/surface/latest` | Latest IV surface tensor |
-| `GET` | `/surface/{date}` | Historical surface for a date |
-| `GET` | `/forecast/latest` | Latest 1-day-ahead surface forecast |
-| `GET` | `/signals/latest` | Current trading signals |
-| `GET` | `/signals/history?days=30` | Signal history |
-| `POST` | `/surface/compute` | Compute surface from custom chain |
-| `GET` | `/model/metrics` | Champion model performance metrics |
-| `GET` | `/model/champion` | Champion model metadata |
-| `GET` | `/regimes/current` | Current market regime |
-| `GET` | `/pca/components` | PCA factor loadings |
+The build writes `vol_surface_engine/_iv_core.<python-tag>.pyd` (or `.so`), next to
+`iv_solver.py`. The C++ runtime is linked statically on MinGW so the module has no extra
+DLL dependencies.
 
-Interactive API docs: http://localhost:8000/docs
+An MSVC branch exists in `cpp/CMakeLists.txt` (`/W4 /permissive- /O2`) but has not been
+built or tested.
 
----
+Compiler flags: `-O2 -std=c++17 -Wall -Wextra -Wpedantic`, plus `-Werror` with
+`-DNEUROVOL_WERROR=ON`. The build is warning-free with clang 23 (llvm-mingw).
 
-## Contributing
+## Running the benchmark and accuracy check
 
-1. Fork the repository and create a feature branch:
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
+```bash
+python bench/benchmark.py            # writes bench/results.md and bench/results.json
+python bench/compare_backends.py     # writes bench/agreement.md (100k contracts)
+```
 
-2. Install development dependencies:
-   ```bash
-   pip install -e ".[dev]"
-   pre-commit install
-   ```
+`benchmark.py` defaults to 20 timed runs per size for `numpy` and `cpp`. The per-row
+`python` backend is slow enough that the default is 20 runs at 1k and 10k and 3 runs at
+100k; change this with `--python-repeats`. The full default run took 53 minutes on
+the machine in `bench/results.md`, almost all of it in the per-row Python backend.
 
-3. Make your changes with tests:
-   ```bash
-   pytest tests/ -v --cov=vol_surface_engine --cov=backtesting
-   ```
+## Status and known limitations
 
-4. Ensure code quality passes:
-   ```bash
-   ruff check .
-   mypy backtesting/ vol_surface_engine/ --ignore-missing-imports
-   ```
+* **Initial guess.** Brenner-Subrahmanyam is an at-the-money approximation. For
+  out-of-the-money quotes it lands near zero, vega there underflows, and Newton hands
+  the contract to the bracketing fallback. On the synthetic chain that is
+  39.0% of all contracts. The behavior is the same in all backends.
+* **Backtester P&L is a simulation.** `BacktestEngine.run` uses the forecast's
+  `rv_realized` if provided and otherwise assumes realized volatility is 92% of ATM
+  implied, which builds a positive vol-carry return into the default. Use it with real
+  realized-vol inputs.
+* **Training** (`training/trainer.py`, `training/walk_forward.py`) imports
+  `models.build_model`, `models.losses.CombinedVolLoss`, and `training.callbacks`, which
+  do not exist yet. `WalkForwardValidator.get_fold_splits` works on its own, but the
+  module imports `pytorch_lightning` at the top, so it needs the `training` extra.
+* **airflow/dags/** are DAG skeletons. Every task body is a placeholder that only passes
+  file paths between tasks; no data is fetched or written. **kafka/create_topics.sh**
+  creates topics that no code produces to or consumes from.
+* `features/realized_vol.py` warns at import time if the optional `arch` package is
+  missing.
 
-5. Submit a pull request with a clear description of the change and its motivation.
+## Roadmap (not built)
 
-### Coding Standards
+None of the following exists in the repository yet:
 
-- Python 3.11+ type hints throughout
-- Docstrings on all public classes and methods
-- Unit tests for all numerical functions
-- No hard-coded credentials or paths
-
----
+* Neural surface forecasting models (ConvLSTM, transformer) and their loss functions
+* Live market data ingestion and streaming (Kafka producers and consumers)
+* REST API and dashboard
+* Working Airflow pipelines and container deployment
+* A better initial guess in the IV solver to reduce fallback calls, and multithreading
+  across contracts in the C++ batch
 
 ## License
 
-This project is licensed under the **MIT License**.
-
-```
-MIT License
-
-Copyright (c) 2025 Nareh Avagyan
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
+MIT. Copyright (c) 2025 Nareh Avagyan.
